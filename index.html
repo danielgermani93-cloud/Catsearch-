@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#10b981">
+    <meta name="description" content="CatSearch - Ricerca vocale e gestione catalogo prodotti">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="CatSearch">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%2310b981' width='100' height='100' rx='20'/><text x='50' y='70' font-size='60' text-anchor='middle' fill='white'>🔍</text></svg>">
+    <title>CatSearch</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+    <script>
+        firebase.initializeApp({
+            apiKey: "AIzaSyDNfGTMYx6sB6DS0M9P7pYdAu_ZWvtLELU",
+            authDomain: "catsearch-585e0.firebaseapp.com",
+            projectId: "catsearch-585e0",
+            storageBucket: "catsearch-585e0.firebasestorage.app",
+            messagingSenderId: "126444973350",
+            appId: "1:126444973350:web:862e494e41158f375ae5e7"
+        });
+        window.db = firebase.firestore();
+        window.storage = firebase.storage();
+        
+        // Registra Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('sw.js').then(function(reg) {
+                    console.log('✓ Service Worker registrato');
+                }).catch(function(err) {
+                    console.log('✗ Service Worker errore:', err);
+                });
+            });
+        }
+    </script>
+    <style>
+        body{margin:0;font-family:sans-serif}
+        .listening{animation:listening 1.5s ease-in-out infinite}
+        @keyframes listening{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.15);opacity:0.8}}
+        .tab-active{background:linear-gradient(135deg, #10b981 0%, #059669 100%);color:white}
+        .install-prompt{animation:slideUp 0.3s ease-out}
+        @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const {useState, useEffect, useRef} = React;
+
+        function App() {
+            const [activeTab, setActiveTab] = useState('search');
+            const [items, setItems] = useState([]);
+            const [search, setSearch] = useState('');
+            const [desc, setDesc] = useState('');
+            const [code, setCode] = useState('');
+            const [img, setImg] = useState(null);
+            const [bulk, setBulk] = useState('');
+            const [editId, setEditId] = useState(null);
+            const [editD, setEditD] = useState('');
+            const [editC, setEditC] = useState('');
+            const [editI, setEditI] = useState(null);
+            const [showBulk, setShowBulk] = useState(false);
+            const [loading, setLoading] = useState(true);
+            const [uploading, setUploading] = useState(false);
+            const [listening, setListening] = useState(false);
+            const [showInstall, setShowInstall] = useState(false);
+            const [deferredPrompt, setDeferredPrompt] = useState(null);
+            const recognitionRef = useRef(null);
+            
+            useEffect(function() {
+                let attempts = 0;
+                const checker = setInterval(function() {
+                    attempts = attempts + 1;
+                    if (window.db) {
+                        clearInterval(checker);
+                        loadItems();
+                    } else if (attempts >= 50) {
+                        clearInterval(checker);
+                        setLoading(false);
+                    }
+                }, 100);
+                return function() {
+                    clearInterval(checker);
+                };
+            }, []);
+            
+            useEffect(function() {
+                // Gestione prompt installazione PWA
+                const handleBeforeInstall = function(e) {
+                    e.preventDefault();
+                    setDeferredPrompt(e);
+                    setShowInstall(true);
+                };
+                
+                window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+                
+                return function() {
+                    window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+                };
+            }, []);
+            
+            useEffect(function() {
+                if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                    const recognition = new SpeechRecognition();
+                    recognition.lang = 'it-IT';
+                    recognition.continuous = false;
+                    recognition.interimResults = false;
+                    
+                    recognition.onresult = function(event) {
+                        const transcript = event.results[0][0].transcript;
+                        setSearch(transcript);
+                        setListening(false);
+                    };
+                    
+                    recognition.onerror = function() {
+                        setListening(false);
+                    };
+                    
+                    recognition.onend = function() {
+                        setListening(false);
+                    };
+                    
+                    recognitionRef.current = recognition;
+                }
+            }, []);
+            
+            const handleInstallClick = async function() {
+                if (!deferredPrompt) return;
+                
+                deferredPrompt.prompt();
+                const result = await deferredPrompt.userChoice;
+                
+                if (result.outcome === 'accepted') {
+                    console.log('✓ App installata');
+                }
+                
+                setDeferredPrompt(null);
+                setShowInstall(false);
+            };
+            
+            const loadItems = async function() {
+                try {
+                    window.db.collection('items').onSnapshot(async function(snap) {
+                        const list = snap.docs.map(function(d) {
+                            const data = d.data();
+                            data.id = d.id;
+                            return data;
+                        });
+                        const seen = new Map();
+                        const dups = [];
+                        list.forEach(function(i) {
+                            if (seen.has(i.code)) {
+                                dups.push(i.id);
+                            } else {
+                                seen.set(i.code, i);
+                            }
+                        });
+                        if (dups.length > 0) {
+                            for (const id of dups) {
+                                try {
+                                    await window.db.collection('items').doc(id).delete();
+                                } catch(e) {}
+                            }
+                        }
+                        setItems(Array.from(seen.values()));
+                        setLoading(false);
+                    });
+                } catch(e) {
+                    setLoading(false);
+                }
+            };
+            
+            const startVoiceSearch = function() {
+                if (recognitionRef.current && !listening) {
+                    setListening(true);
+                    recognitionRef.current.start();
+                }
+            };
+            
+            const stopVoiceSearch = function() {
+                if (recognitionRef.current && listening) {
+                    recognitionRef.current.stop();
+                    setListening(false);
+                }
+            };
+            
+            const addItem = async function() {
+                if (!desc.trim() || !code.trim()) {
+                    alert('Inserisci descrizione e codice!');
+                    return;
+                }
+                const existing = items.find(function(i) {
+                    return i.code === code.trim();
+                });
+                if (existing) {
+                    alert('Codice già esistente!');
+                    return;
+                }
+                setUploading(true);
+                try {
+                    let url = null;
+                    if (img) {
+                        const ref = window.storage.ref().child('items/' + Date.now() + '_' + img.name);
+                        await ref.put(img);
+                        url = await ref.getDownloadURL();
+                    }
+                    await window.db.collection('items').add({
+                        description: desc.trim(),
+                        code: code.trim(),
+                        imageUrl: url,
+                        createdAt: new Date().toISOString()
+                    });
+                    setDesc('');
+                    setCode('');
+                    setImg(null);
+                    alert('✓ Prodotto aggiunto!');
+                } catch(e) {
+                    alert('Errore: ' + e.message);
+                } finally {
+                    setUploading(false);
+                }
+            };
+            
+            const addBulk = async function() {
+                if (!bulk.trim()) return;
+                const lines = bulk.split('\n').filter(function(l) {
+                    return l.trim();
+                });
+                const valid = [];
+                const existCodes = new Set(items.map(function(i) {
+                    return i.code;
+                }));
+                const newCodes = new Set();
+                for (const l of lines) {
+                    const m = l.match(/\b\d+\/\d+\b/);
+                    if (m) {
+                        const c = m[0];
+                        const d = l.replace(c, '').trim();
+                        if (d && c && !existCodes.has(c) && !newCodes.has(c)) {
+                            valid.push({description: d, code: c});
+                            newCodes.add(c);
+                        }
+                    }
+                }
+                if (valid.length === 0) {
+                    alert('Nessun prodotto valido!\n\nFormato: Descrizione 123/456');
+                    return;
+                }
+                setUploading(true);
+                try {
+                    for (const v of valid) {
+                        await window.db.collection('items').add({
+                            description: v.description,
+                            code: v.code,
+                            createdAt: new Date().toISOString()
+                        });
+                    }
+                    setBulk('');
+                    setShowBulk(false);
+                    alert('✓ ' + valid.length + ' prodotti aggiunti!');
+                } catch(e) {
+                    alert('Errore durante l\'aggiunta');
+                } finally {
+                    setUploading(false);
+                }
+            };
+            
+            const delItem = async function(id) {
+                if (!confirm('Eliminare questo prodotto?')) return;
+                try {
+                    await window.db.collection('items').doc(id).delete();
+                } catch(e) {
+                    alert('Errore');
+                }
+            };
+            
+            const startEdit = function(i) {
+                setEditId(i.id);
+                setEditD(i.description);
+                setEditC(i.code);
+                setEditI(null);
+            };
+            
+            const saveEdit = async function() {
+                if (!editD.trim() || !editC.trim()) return;
+                setUploading(true);
+                try {
+                    const curr = items.find(function(i) {
+                        return i.id === editId;
+                    });
+                    let url = curr ? curr.imageUrl : null;
+                    if (editI) {
+                        const ref = window.storage.ref().child('items/' + Date.now() + '_' + editI.name);
+                        await ref.put(editI);
+                        url = await ref.getDownloadURL();
+                    }
+                    await window.db.collection('items').doc(editId).update({
+                        description: editD.trim(),
+                        code: editC.trim(),
+                        imageUrl: url
+                    });
+                    cancelEdit();
+                } catch(e) {
+                    alert('Errore');
+                } finally {
+                    setUploading(false);
+                }
+            };
+            
+            const cancelEdit = function() {
+                setEditId(null);
+                setEditD('');
+                setEditC('');
+                setEditI(null);
+            };
+            
+            const filtered = items.filter(function(i) {
+                const searchLower = search.toLowerCase();
+                return i.description.toLowerCase().includes(searchLower) ||
+                       i.code.toLowerCase().includes(searchLower);
+            });
+            
+            if (loading) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black flex items-center justify-center">
+                        <div className="text-white text-xl">Caricamento...</div>
+                    </div>
+                );
+            }
+            
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black pb-24">
+                    {/* Prompt Installazione PWA */}
+                    {showInstall && (
+                        <div className="fixed bottom-4 left-4 right-4 z-50 install-prompt">
+                            <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-3xl p-4 shadow-2xl flex items-center gap-4">
+                                <div className="text-4xl">📱</div>
+                                <div className="flex-1">
+                                    <p className="text-white font-bold">Installa CatSearch</p>
+                                    <p className="text-emerald-100 text-sm">Usala come app nativa!</p>
+                                </div>
+                                <button
+                                    onClick={handleInstallClick}
+                                    className="px-6 py-3 bg-white text-emerald-600 rounded-full font-bold hover:bg-emerald-50 transition-colors"
+                                >
+                                    Installa
+                                </button>
+                                <button
+                                    onClick={function() {setShowInstall(false);}}
+                                    className="p-2 text-white/80 hover:text-white"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    
+                    {/* Header */}
+                    <div className="text-center py-8 px-4">
+                        <h1 className="text-4xl font-bold text-white mb-2">CatSearch</h1>
+                        <p className="text-gray-500 text-sm">Created By Daniel Germani</p>
+                    </div>
+                    
+                    {/* Tab Navigation */}
+                    <div className="max-w-2xl mx-auto px-4 mb-6">
+                        <div className="bg-gray-900/30 rounded-full p-1.5 border border-gray-800/50 flex gap-2">
+                            <button
+                                onClick={function() {setActiveTab('search');}}
+                                className={`flex-1 py-3 px-4 rounded-full font-semibold text-sm transition-all ${
+                                    activeTab === 'search' ? 'tab-active shadow-lg' : 'text-gray-400 hover:text-gray-300'
+                                }`}
+                            >
+                                🔍 Ricerca
+                            </button>
+                            <button
+                                onClick={function() {setActiveTab('catalog');}}
+                                className={`flex-1 py-3 px-4 rounded-full font-semibold text-sm transition-all ${
+                                    activeTab === 'catalog' ? 'tab-active shadow-lg' : 'text-gray-400 hover:text-gray-300'
+                                }`}
+                            >
+                                📦 Catalogo
+                            </button>
+                            <button
+                                onClick={function() {setActiveTab('add');}}
+                                className={`flex-1 py-3 px-4 rounded-full font-semibold text-sm transition-all ${
+                                    activeTab === 'add' ? 'tab-active shadow-lg' : 'text-gray-400 hover:text-gray-300'
+                                }`}
+                            >
+                                ➕ Aggiungi
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div className="max-w-2xl mx-auto px-4">
+                        {/* SEZIONE 1: RICERCA */}
+                        {activeTab === 'search' && (
+                            <div>
+                                <div className="mb-4">
+                                    <input
+                                        type="text"
+                                        placeholder="Cerca per nome o codice..."
+                                        value={search}
+                                        onChange={function(e) {setSearch(e.target.value);}}
+                                        className="w-full px-5 py-4 bg-gray-900/50 border border-gray-800 rounded-full text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                                    />
+                                </div>
+                                
+                                <div className="flex justify-center mb-6">
+                                    <button 
+                                        onClick={listening ? stopVoiceSearch : startVoiceSearch}
+                                        className={`w-16 h-16 rounded-full flex items-center justify-center transition-all shadow-lg ${
+                                            listening ? 'bg-red-500 listening' : 'bg-gradient-to-br from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400'
+                                        }`}
+                                    >
+                                        <span className="text-2xl">{listening ? '🎤' : '🎙️'}</span>
+                                    </button>
+                                </div>
+                                
+                                {listening && (
+                                    <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-2xl text-center">
+                                        <p className="text-red-400 font-medium">🎤 In ascolto...</p>
+                                    </div>
+                                )}
+                                
+                                <div className="space-y-4">
+                                    {search && (
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h2 className="text-lg font-bold text-white">
+                                                Risultati ({filtered.length})
+                                            </h2>
+                                            <button 
+                                                onClick={function() {setSearch('');}}
+                                                className="px-4 py-2 bg-gray-800/50 text-gray-400 rounded-full text-sm hover:bg-gray-700/50 transition-colors"
+                                            >
+                                                ✕ Pulisci
+                                            </button>
+                                        </div>
+                                    )}
+                                    
+                                    {!search ? (
+                                        <div className="text-center py-20">
+                                            <div className="text-6xl mb-4">🔍</div>
+                                            <p className="text-gray-500 text-lg mb-2">Inizia a cercare</p>
+                                            <p className="text-gray-600 text-sm">Usa la barra di ricerca o la voce</p>
+                                        </div>
+                                    ) : filtered.length === 0 ? (
+                                        <div className="text-center py-20">
+                                            <div className="text-6xl mb-4">❌</div>
+                                            <p className="text-gray-500 text-lg mb-2">Nessun risultato</p>
+                                            <p className="text-gray-600 text-sm">Prova con altri termini</p>
+                                        </div>
+                                    ) : (
+                                        filtered.map(function(i) {
+                                            return (
+                                                <div key={i.id} className="bg-gray-900/30 rounded-3xl p-5 border border-gray-800/50">
+                                                    {i.imageUrl && (
+                                                        <img src={i.imageUrl} alt={i.description} className="w-full h-56 object-cover rounded-2xl mb-4"/>
+                                                    )}
+                                                    <h3 className="text-white font-semibold text-lg mb-1">{i.description}</h3>
+                                                    <p className="text-emerald-400 font-mono text-sm">{i.code}</p>
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* SEZIONE 2: CATALOGO COMPLETO */}
+                        {activeTab === 'catalog' && (
+                            <div className="space-y-4">
+                                <h2 className="text-xl font-bold text-white mb-4">
+                                    Tutti i Prodotti ({items.length})
+                                </h2>
+                                
+                                {items.length === 0 ? (
+                                    <div className="text-center py-20">
+                                        <div className="text-6xl mb-4">📦</div>
+                                        <p className="text-gray-500 text-lg mb-2">Catalogo vuoto</p>
+                                        <p className="text-gray-600 text-sm">Aggiungi il primo prodotto!</p>
+                                    </div>
+                                ) : (
+                                    items.map(function(i) {
+                                        return (
+                                            <div key={i.id} className="bg-gray-900/30 rounded-3xl p-5 border border-gray-800/50">
+                                                {editId === i.id ? (
+                                                    <div className="space-y-3">
+                                                        <input 
+                                                            type="text" 
+                                                            value={editD} 
+                                                            onChange={function(e) {setEditD(e.target.value);}} 
+                                                            className="w-full px-4 py-3 bg-gray-950/50 border border-gray-800 rounded-full text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                                                        />
+                                                        <input 
+                                                            type="text" 
+                                                            value={editC} 
+                                                            onChange={function(e) {setEditC(e.target.value);}} 
+                                                            className="w-full px-4 py-3 bg-gray-950/50 border border-gray-800 rounded-full text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                                                        />
+                                                        <input 
+                                                            type="file" 
+                                                            accept="image/*" 
+                                                            onChange={function(e) {setEditI(e.target.files[0]);}} 
+                                                            className="hidden" 
+                                                            id={'edit-' + i.id}
+                                                        />
+                                                        <label 
+                                                            htmlFor={'edit-' + i.id} 
+                                                            className="w-full px-4 py-3 bg-gray-950/50 border border-gray-800 rounded-full text-gray-400 flex items-center justify-center cursor-pointer text-sm"
+                                                        >
+                                                            {editI ? '✓ ' + editI.name : '📷 Cambia foto'}
+                                                        </label>
+                                                        <div className="flex gap-3">
+                                                            <button 
+                                                                onClick={saveEdit} 
+                                                                disabled={uploading} 
+                                                                className="flex-1 bg-emerald-600 text-white py-3 rounded-full font-medium disabled:opacity-50"
+                                                            >
+                                                                {uploading ? 'Salvataggio...' : 'Salva'}
+                                                            </button>
+                                                            <button 
+                                                                onClick={cancelEdit} 
+                                                                className="flex-1 bg-gray-700 text-white py-3 rounded-full font-medium"
+                                                            >
+                                                                Annulla
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div>
+                                                        {i.imageUrl && (
+                                                            <img src={i.imageUrl} alt={i.description} className="w-full h-56 object-cover rounded-2xl mb-4"/>
+                                                        )}
+                                                        {!i.imageUrl && (
+                                                            <div className="w-full h-56 bg-gray-800/50 rounded-2xl mb-4 flex items-center justify-center">
+                                                                <span className="text-gray-600 text-lg">📷</span>
+                                                            </div>
+                                                        )}
+                                                        <div className="flex items-center justify-between">
+                                                            <div className="flex-1">
+                                                                <h3 className="text-white font-semibold text-lg mb-1">{i.description}</h3>
+                                                                <p className="text-emerald-400 font-mono text-sm">{i.code}</p>
+                                                            </div>
+                                                            <div className="flex gap-2">
+                                                                <button 
+                                                                    onClick={function() {startEdit(i);}} 
+                                                                    className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors"
+                                                                >
+                                                                    ✏️
+                                                                </button>
+                                                                <button 
+                                                                    onClick={function() {delItem(i.id);}} 
+                                                                    className="p-3 bg-red-500/10 text-red-400 rounded-full hover:bg-red-500/20 transition-colors"
+                                                                >
+                                                                    🗑️
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+                        )}
+                        
+                        {/* SEZIONE 3: AGGIUNGI */}
+                        {activeTab === 'add' && (
+                            <div>
+                                <div className="bg-gray-900/30 rounded-3xl p-6 border border-gray-800/50">
+                                    <div className="flex justify-between mb-6">
+                                        <h2 className="text-xl font-bold text-white">
+                                            {showBulk ? 'Aggiungi Lista' : 'Aggiungi Prodotto'}
+                                        </h2>
+                                        <button 
+                                            onClick={function() {setShowBulk(!showBulk);}} 
+                                            className="px-5 py-2.5 bg-gray-800/50 text-gray-300 rounded-full text-sm border border-gray-700 hover:bg-gray-700/50 transition-colors font-medium"
+                                        >
+                                            {showBulk ? '📝 Singolo' : '📋 Lista'}
+                                        </button>
+                                    </div>
+                                    
+                                    {showBulk ? (
+                                        <div className="space-y-4">
+                                            <div className="bg-blue-500/10 border border-blue-500/30 rounded-2xl p-4 mb-4">
+                                                <p className="text-blue-300 text-sm font-semibold mb-2">📋 Formato Lista:</p>
+                                                <p className="text-blue-400 text-xs font-mono">Vite M8 123/456</p>
+                                                <p className="text-blue-400 text-xs font-mono">Bullone M10 789/012</p>
+                                            </div>
+                                            <textarea
+                                                placeholder="Inserisci lista prodotti (uno per riga)"
+                                                value={bulk}
+                                                onChange={function(e) {setBulk(e.target.value);}}
+                                                rows={10}
+                                                className="w-full px-5 py-4 bg-gray-950/50 border border-gray-800 rounded-3xl text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 resize-none"
+                                            />
+                                            <button 
+                                                onClick={addBulk} 
+                                                disabled={uploading}
+                                                className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 text-white py-4 rounded-full font-semibold hover:from-emerald-500 hover:to-emerald-400 transition-all disabled:opacity-50"
+                                            >
+                                                {uploading ? '⏳ Aggiunta in corso...' : '✓ Aggiungi Lista'}
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="block text-gray-400 text-sm mb-2 ml-1">Descrizione</label>
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="Es: Vite M8" 
+                                                    value={desc} 
+                                                    onChange={function(e) {setDesc(e.target.value);}} 
+                                                    className="w-full px-5 py-4 bg-gray-950/50 border border-gray-800 rounded-full text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-gray-400 text-sm mb-2 ml-1">Codice</label>
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="Es: 123/456" 
+                                                    value={code} 
+                                                    onChange={function(e) {setCode(e.target.value);}} 
+                                                    className="w-full px-5 py-4 bg-gray-950/50 border border-gray-800 rounded-full text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-gray-400 text-sm mb-2 ml-1">Foto (opzionale)</label>
+                                                <input 
+                                                    type="file" 
+                                                    accept="image/*" 
+                                                    onChange={function(e) {setImg(e.target.files[0]);}} 
+                                                    className="hidden" 
+                                                    id="imgInput"
+                                                />
+                                                <label 
+                                                    htmlFor="imgInput" 
+                                                    className="w-full px-5 py-4 bg-gray-950/50 border border-gray-800 rounded-full text-gray-400 flex items-center justify-center cursor-pointer hover:bg-gray-900/50 transition-colors"
+                                                >
+                                                    <span className="text-sm">{img ? '✓ ' + img.name : '📷 Seleziona foto'}</span>
+                                                </label>
+                                            </div>
+                                            <button 
+                                                onClick={addItem} 
+                                                disabled={uploading} 
+                                                className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 text-white py-4 rounded-full font-semibold disabled:opacity-50 hover:from-emerald-500 hover:to-emerald-400 transition-all"
+                                            >
+                                                {uploading ? '⏳ Aggiunta in corso...' : '✓ Aggiungi Prodotto'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+        
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
