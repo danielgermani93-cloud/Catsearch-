@@ -483,11 +483,90 @@
                                         filtered.map(function(i) {
                                             return (
                                                 <div key={i.id} className="bg-gray-900/30 rounded-3xl p-5 border border-gray-800/50">
-                                                    {i.imageUrl && (
-                                                        <img src={i.imageUrl} alt={i.description} className="w-full h-56 object-cover rounded-2xl mb-4"/>
+                                                    {editId === i.id ? (
+                                                        <div className="space-y-3">
+                                                            <input
+                                                                type="text"
+                                                                value={editD}
+                                                                onChange={function(e) {setEditD(e.target.value);}}
+                                                                className="w-full px-4 py-3 bg-gray-950/50 border border-gray-800 rounded-full text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                                                            />
+                                                            <input
+                                                                type="text"
+                                                                value={editC}
+                                                                onChange={function(e) {setEditC(e.target.value);}}
+                                                                className="w-full px-4 py-3 bg-gray-950/50 border border-gray-800 rounded-full text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                                                            />
+                                                            <input
+                                                                type="file"
+                                                                accept="image/*"
+                                                                onChange={function(e) {setEditI(e.target.files[0]);}}
+                                                                className="hidden"
+                                                                id={'search-edit-' + i.id}
+                                                            />
+                                                            <label
+                                                                htmlFor={'search-edit-' + i.id}
+                                                                className="w-full px-4 py-3 bg-gray-950/50 border border-gray-800 rounded-full text-gray-400 flex items-center justify-center cursor-pointer text-sm"
+                                                            >
+                                                                {editI ? '✓ ' + editI.name : (i.imageUrl ? '📷 Cambia foto' : '📷 Aggiungi foto')}
+                                                            </label>
+                                                            {i.imageUrl && !editI && (
+                                                                <div className="relative">
+                                                                    <img src={i.imageUrl} alt={i.description} className="w-full h-40 object-cover rounded-2xl opacity-60"/>
+                                                                    <p className="absolute bottom-2 left-0 right-0 text-center text-gray-300 text-xs">Foto attuale</p>
+                                                                </div>
+                                                            )}
+                                                            <div className="flex gap-3">
+                                                                <button
+                                                                    onClick={saveEdit}
+                                                                    disabled={uploading}
+                                                                    className="flex-1 bg-emerald-600 text-white py-3 rounded-full font-medium disabled:opacity-50"
+                                                                >
+                                                                    {uploading ? 'Salvataggio...' : 'Salva'}
+                                                                </button>
+                                                                <button
+                                                                    onClick={cancelEdit}
+                                                                    className="flex-1 bg-gray-700 text-white py-3 rounded-full font-medium"
+                                                                >
+                                                                    Annulla
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ) : (
+                                                        <div>
+                                                            {i.imageUrl ? (
+                                                                <img src={i.imageUrl} alt={i.description} className="w-full h-56 object-cover rounded-2xl mb-4"/>
+                                                            ) : (
+                                                                <div
+                                                                    onClick={function() {startEdit(i);}}
+                                                                    className="w-full h-28 mb-4 rounded-2xl border-2 border-dashed border-gray-700 flex flex-col items-center justify-center cursor-pointer hover:border-emerald-600/50 hover:bg-emerald-900/10 transition-all"
+                                                                >
+                                                                    <span className="text-3xl mb-1">📷</span>
+                                                                    <span className="text-gray-500 text-xs">Aggiungi foto</span>
+                                                                </div>
+                                                            )}
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="flex-1">
+                                                                    <h3 className="text-white font-semibold text-lg mb-1">{i.description}</h3>
+                                                                    <p className="text-emerald-400 font-mono text-sm">{i.code}</p>
+                                                                </div>
+                                                                <div className="flex gap-2 ml-3">
+                                                                    <button
+                                                                        onClick={function() {startEdit(i);}}
+                                                                        className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors"
+                                                                    >
+                                                                        ✏️
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={function() {delItem(i.id);}}
+                                                                        className="p-3 bg-red-500/10 text-red-400 rounded-full hover:bg-red-500/20 transition-colors"
+                                                                    >
+                                                                        🗑️
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        </div>
                                                     )}
-                                                    <h3 className="text-white font-semibold text-lg mb-1">{i.description}</h3>
-                                                    <p className="text-emerald-400 font-mono text-sm">{i.code}</p>
                                                 </div>
                                             );
                                         })
