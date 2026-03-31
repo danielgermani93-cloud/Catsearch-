@@ -59,6 +59,7 @@
             const [activeTab, setActiveTab] = useState('search');
             const [items, setItems] = useState([]);
             const [search, setSearch] = useState('');
+            const [catalogSearch, setCatalogSearch] = useState('');
             const [desc, setDesc] = useState('');
             const [code, setCode] = useState('');
             const [img, setImg] = useState(null);
@@ -171,7 +172,9 @@
                                 } catch(e) {}
                             }
                         }
-                        setItems(Array.from(seen.values()));
+                        setItems(Array.from(seen.values()).sort(function(a, b) {
+                            return a.description.localeCompare(b.description, 'it');
+                        }));
                         setLoading(false);
                     });
                 } catch(e) {
@@ -257,13 +260,17 @@
                 }
                 setUploading(true);
                 try {
+                    const batch = window.db.batch();
                     for (const v of valid) {
-                        await window.db.collection('items').add({
+                        const ref = window.db.collection('items').doc();
+                        batch.set(ref, {
                             description: v.description,
                             code: v.code,
+                            imageUrl: null,
                             createdAt: new Date().toISOString()
                         });
                     }
+                    await batch.commit();
                     setBulk('');
                     setShowBulk(false);
                     alert('✓ ' + valid.length + ' prodotti aggiunti!');
@@ -292,6 +299,13 @@
             
             const saveEdit = async function() {
                 if (!editD.trim() || !editC.trim()) return;
+                const duplicate = items.find(function(i) {
+                    return i.code === editC.trim() && i.id !== editId;
+                });
+                if (duplicate) {
+                    alert('Codice già usato da: ' + duplicate.description);
+                    return;
+                }
                 setUploading(true);
                 try {
                     const curr = items.find(function(i) {
@@ -327,6 +341,13 @@
                 const searchLower = search.toLowerCase();
                 return i.description.toLowerCase().includes(searchLower) ||
                        i.code.toLowerCase().includes(searchLower);
+            });
+
+            const catalogFiltered = items.filter(function(i) {
+                const q = catalogSearch.toLowerCase();
+                if (!q) return true;
+                return i.description.toLowerCase().includes(q) ||
+                       i.code.toLowerCase().includes(q);
             });
             
             if (loading) {
@@ -478,18 +499,36 @@
                         {/* SEZIONE 2: CATALOGO COMPLETO */}
                         {activeTab === 'catalog' && (
                             <div className="space-y-4">
-                                <h2 className="text-xl font-bold text-white mb-4">
-                                    Tutti i Prodotti ({items.length})
-                                </h2>
-                                
+                                        <div className="flex items-center justify-between mb-4">
+                                    <h2 className="text-xl font-bold text-white">
+                                        {catalogSearch ? `Risultati (${catalogFiltered.length}/${items.length})` : `Tutti i Prodotti (${items.length})`}
+                                    </h2>
+                                </div>
+
+                                <div className="mb-4">
+                                    <input
+                                        type="text"
+                                        placeholder="Filtra catalogo..."
+                                        value={catalogSearch}
+                                        onChange={function(e) { setCatalogSearch(e.target.value); }}
+                                        className="w-full px-5 py-3 bg-gray-900/50 border border-gray-800 rounded-full text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                                    />
+                                </div>
+
                                 {items.length === 0 ? (
                                     <div className="text-center py-20">
                                         <div className="text-6xl mb-4">📦</div>
                                         <p className="text-gray-500 text-lg mb-2">Catalogo vuoto</p>
                                         <p className="text-gray-600 text-sm">Aggiungi il primo prodotto!</p>
                                     </div>
+                                ) : catalogFiltered.length === 0 ? (
+                                    <div className="text-center py-20">
+                                        <div className="text-6xl mb-4">🔎</div>
+                                        <p className="text-gray-500 text-lg mb-2">Nessun risultato</p>
+                                        <p className="text-gray-600 text-sm">Prova con altri termini</p>
+                                    </div>
                                 ) : (
-                                    items.map(function(i) {
+                                    catalogFiltered.map(function(i) {
                                         return (
                                             <div key={i.id} className="bg-gray-900/30 rounded-3xl p-5 border border-gray-800/50">
                                                 {editId === i.id ? (
@@ -539,11 +578,6 @@
                                                     <div>
                                                         {i.imageUrl && (
                                                             <img src={i.imageUrl} alt={i.description} className="w-full h-56 object-cover rounded-2xl mb-4"/>
-                                                        )}
-                                                        {!i.imageUrl && (
-                                                            <div className="w-full h-56 bg-gray-800/50 rounded-2xl mb-4 flex items-center justify-center">
-                                                                <span className="text-gray-600 text-lg">📷</span>
-                                                            </div>
                                                         )}
                                                         <div className="flex items-center justify-between">
                                                             <div className="flex-1">
